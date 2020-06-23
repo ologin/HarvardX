@@ -1,0 +1,601 @@
+---
+title: "European Video Games Bestsellers"
+author: "Olga Loginova"
+date: "19/06/2020"
+output: pdf_document
+always_allow_html: true
+---
+
+# Introduction
+
+## Overview
+
+The project is part of the HervardX: PH125.9x Data Science: Capstone course. The entire course consists of two parts: MovieLens Project and CYO Project, respectively. The current document is dedicated to CYO Project. 
+
+For this project, students must apply machine learning techniques other than the standard linear regression. Students are allowed to use any publicly available dataset to solve the problem of their choice. There should be at least two machine learning models the data is trained and tested on.
+
+## Libraries
+
+```{r libraries, echo=FALSE}
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(caretEnsemble)) install.packages("caretEnsemble", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if (!require(DT)) install.packages("DT", repos = "http://cran.us.r-project.org")
+if (!require(wordcloud)) install.packages("RColorBrewer", repos = "http://cran.us.r-project.org")
+```
+
+## Dataset
+
+The dataset used in the project is a [combination of VGChartz Video Games Sales and corresponding ratings from Metacritic Video](https://www.kaggle.com/rush4ratio/video-game-sales-with-ratings).
+
+This dataset extends the number of variables from VGChartz Video Games Sales (Name, Platform, Year_of_Release, Genre, Publisher, NA_Sales, EU_Sales, JP_Sales, Other_Sales, Global_Sales) with a web scrape from Metacritic adding Critic_score, Critic_Count (the number of critics who gave a Critic_Score), User_Score, User_Count, Developer (game developer), and Rating (ESRB rating).
+```{r data, echo=FALSE}
+data <- read.csv("../CYO/Video_Games_Sales_as_at_22_Dec_2016.csv", stringsAsFactor = FALSE)
+```
+There are 16719 records in the data set: 
+```{r rows}
+nrow(data)
+```
+
+First six rows (to check the column names and information in them):
+
+```{r head, echo=FALSE}
+head(data)
+```
+The data seems to be in tidy format, but there are missing information and NAs in at least Critic_Score, Critic_Count, User_Score, User_Count, Developer. Critic_Score is essential for predicting models, so we need to tackle the NAs and empty strings there.
+
+There are no duplicates in the data:
+
+```{r duplicates, echo=FALSE}
+duplicated(data) %>%
+  sum()
+```
+
+Let's see the summary statistics of each column and data structure:
+
+```{r summary, echo=FALSE}
+str(data)
+```
+
+Year_of_Release is a character vector. Let's convert it into the numeric one.
+
+```{r year into num}
+data$Year_of_Release <- as.numeric(data$Year_of_Release)
+```
+
+As long as the project is focused on EU Sales, we will remove all zero values in the EU_Sales column (apparently, the games were not distributed on the European market).
+
+```{r filter EU sales, echo=FALSE}
+data <- data %>% filter(EU_Sales != 0)
+```
+
+There are also some missing year data Year_of_Release.
+
+```{r years}
+y_data <- data %>% filter(is.na(Year_of_Release))
+head(y_data)
+```
+It seems that there's a pattern for some Names where the year of release is written in the end of the Name. So we can extract the year from such Names:
+```{r year pattern}
+pattern <- "\\s(\\d{4})$"
+for (i in which(y_data$Name %in% str_subset(y_data$Name, pattern))) 
+  y_data[i, 3] <- as.numeric(str_sub(y_data[i, 1],-4,-1))
+```
+
+The rest of the missing years were populated in accordance with the Internet data. 
+
+```{r year filling, echo=FALSE}
+y_data[which(y_data$Name %in% c("Dead Island: Riptide", "Dead Space 3", "Tomb Raider (2013)")), 3] <- 2013
+y_data[which(y_data$Name %in% c("Jewel Link Chronicles: Mountains of Madness")), 3] <- 2012
+y_data[which(y_data$Name %in% c("LEGO Harry Potter: Years 5-7", "Happy Feet Two", "Test Drive Unlimited 2", 
+                                "Battle vs. Chess", "The Lord of the Rings: War in the North", 
+                                "Dream Trigger 3D", "Jonah Lomu Rugby Challenge",
+                                "Rocksmith", "TERA", 
+                                "The History Channel: Great Battles - Medieval", 
+                                "Tropico 4")), 3] <- 2011
+y_data[which(y_data$Name %in% c("Call of Duty: Black Ops", "Bejeweled 3", 
+                                "Big Beach Sports 2", "BioShock 2", "Singularity", 
+                                "Dance! It's Your Stage", "Ferrari: The Race Experience", 
+                                "Get Fit with Mel B", "WRC: FIA World Rally Championship", 
+                                "World of Tanks", "Yakuza 4")), 3] <- 2010
+y_data[which(y_data$Name %in% c("Runaway: A Twist of Fate", "Wet")), 3] <- 2009
+y_data[which(y_data$Name %in% c("Silent Hill: Homecoming", "LEGO Batman: The Videogame", 
+                                "LEGO Indiana Jones: The Original Adventures", 
+                                "Advance Wars: Days of Ruin", "Robert Ludlum's The Bourne Conspiracy", 
+                                "Disgaea 3: Absence of Detention", "GRID", 
+                                "PES 2009: Pro Evolution Soccer", "Shaun White Snowboarding", 
+                                "Street Fighter IV")), 3] <- 2008
+y_data[which(y_data$Name %in% c("Rock Band", "The Golden Compass", 
+                                "Luxor: Pharaoh's Challenge", "Mountain Bike Adrenaline", 
+                                "Shrek the Third", "Star Trek: Conquest")), 3] <- 2007
+y_data[which(y_data$Name %in% c("Call of Duty 3", "Cabela's Alaskan Adventure", 
+                                "Dragon Ball Z: Budokai Tenkaichi 2 (JP sales)", 
+                                "Madden NFL 07", "Mega Man X Collection", 
+                                "Nicktoons: Battle for Volcano Island", "Star Trek: Legacy", 
+                                "Teen Titans", "Tom Clancy's Rainbow Six: Critical Hour")), 3] <- 2006
+y_data[which(y_data$Name %in% c("Combat Elite: WWII Paratroopers", "College Hoops 2K6",
+                                "The Chronicles of Narnia: The Lion, The Witch and The Wardrobe", 
+                                "Disney's Cinderella: Magical Dreams", "Drill Dozer", "Gun", 
+                                "Unreal Championship 2: The Liandri Conflict")), 3] <- 2005
+y_data[which(y_data$Name %in% c("Def Jam: Fight for NY", "McFarlane's Evil Prophecy", 
+                                "The Chronicles of Riddick: Escape from Butcher Bay", 
+                                "The King of Fighters: Maximum Impact - Maniax", "Virtua Quest", 
+                                "WarioWare: Twisted!", "Yu Yu Hakusho: Dark Tournament")), 3] <- 2004
+y_data[which(y_data$Name %in% c("Drake of the 99 Dragons", "NBA Street Vol. 2", "NHL Hitz Pro")), 3] <- 2003
+y_data[which(y_data$Name %in% c("eJay Clubworld", "Final Fantasy XI", "NASCAR: Dirt to Daytona", 
+                                "Godzilla: Destroy All Monsters Melee", "NBA Starting Five", 
+                                "Haven: Call of the King", "Hitman 2: Silent Assassin", 
+                                "Home Run", "Street Hoops", 
+                                "James Cameron's Dark Angel", "Jet X20", 
+                                "MLB SlugFest 20-03", "Pac-Man Fever", 
+                                "Robotech: Battlecry", "Star Wars Jedi Knight II: Jedi Outcast", 
+                                "Super Duper Sumos", "Tom and Jerry in War of the Whiskers", 
+                                "Tribes: Aerial Assault")), 3] <- 2002
+y_data[which(y_data$Name %in% c("Frogger's Adventures: Temple of the Frog", "Suikoden III",
+                                "Alone in the Dark: The New Nightmare", 
+                                "Cubix Robots for Everyone: Clash 'n' Bash", 
+                                "Harvest Moon: Save the Homeland", 
+                                "Metal Gear Solid 2: Substance", "Rayman Arena", "Transworld Surf", 
+                                "Twisted Metal: Small Brawl")), 3] <- 2001
+y_data[which(y_data$Name %in% c("Action Man-Operation Extreme", "Smashing Drive", 
+                                "The Dukes of Hazzard II: Daisy Dukes It Out", 
+                                "WCW Backstage Assault")), 3] <- 2000
+y_data[which(y_data$Name %in% c("Homeworld Remastered Collection", "Legacy of Kain: Soul Reaver", 
+                                "RollerCoaster Tycoon", "Namco Museum")), 3] <- 1999
+y_data[which(y_data$Name == "Triple Play 99"), 3] <- 1998
+y_data[which(y_data$Name == "Donkey Kong Land III"), 3] <- 1997
+y_data[which(y_data$Name == "Super Puzzle Fighter II"), 3] <- 1996
+y_data[which(y_data$Name == "Indy 500"), 3] <- 1995
+y_data[which(y_data$Name %in% c("Ghostbusters II", "Sonic the Hedgehog")), 3] <- 1991
+y_data[which(y_data$Name == "Splatterhouse"), 3] <- 1988
+y_data[which(y_data$Name == "Wheel of Fortune"), 3] <- 1986
+y_data[which(y_data$Name %in% c("Karate", "Sabre Wulf")), 3] <- 1984
+y_data[which(y_data$Name == "Flag Capture"), 3] <- 1983
+y_data[which(y_data$Name %in% c("Adventure", "Dragster", "Fishing Derby", 
+                                "Maze Craze: A Game of Cops 'n Robbers")), 3] <- 1980
+y_data[which(y_data$Name %in% c("Space Invaders", "Breakaway IV", "Hangman", "Slot Machine")), 3] <- 1978
+y_data[which(y_data$Name%in% c("Air-Sea Battle", "Circus Atari", "Combat")), 3] <- 1977
+y_data[which(y_data$Name == "Super Breakout"), 3] <- 1976
+data <- data %>% filter(!is.na(Year_of_Release)) %>% full_join(., y_data)
+head(data)
+```
+
+Now let's check empty values in other columns. As we saw earlier, there are some NAs in Critic Scores:
+
+```{r empty critic scores}
+data %>% filter(is.na(Critic_Score)) %>% nrow()
+```
+
+And an empty record in Genre:
+
+```{r empty genre}
+data %>% filter(Genre == "") %>% nrow()
+```
+
+We will delete these records, even though the dataset will significantly shrink (for now we will consider it more appropriate than, say, mean imputation): 
+
+```{r delete empty}
+data <- data %>% filter(Genre != "" & !is.na(Critic_Score))
+```
+Further, we will consolidate the Platform information into its Producer, making destinction between Sony, Nintendo, Microsoft vs the rest (the diversity in Platform may lead to the situation when we don't have some values in the training set as opposed to the test set): 
+```{r producers by platforms}
+producer <- function(x) {
+  if(x %in% c("PS", "PS2", "PS3", "PS4", "PSP", "PSV") == TRUE) {return("Sony")}
+  else if(x %in% c("3DS", "DS", "GBA", "GC", "N64", "Wii", "WiiU") == TRUE) {return("Nintendo")}
+  else if(x %in% c("PC", "X360", "XB", "XOne") == TRUE) {return("Microsoft")}
+  else {return("Other")}
+  }
+data$Producer <- sapply(data$Platform, producer)
+```
+
+## Aim
+
+The aim of the project is to make a video games bestseller prediction on the European Market. For this purpose, we need to define a Bestseller and add the corresponding column. 
+
+_Bestseller_ is a video game with more that half a million copies sold on the European market. The dataset Bestseller column will have two values - either it's a Bestseller or a Regular game. 
+```{r bestseller}
+bestseller <-function(s){ifelse(s >= 0.5, "Bestseller", "Regular")}
+data$Bestseller <- sapply(data$EU_Sales, bestseller)
+```
+In the current project the predictors we will restricted to Critic_Score, Genre, Year_of_Release, and Producer. Each model will be trained independently, and the results will be combined. 
+
+Thus, we will try Generalised Linear Model (GLM), kNN Model, Classification Tree Model (CART), Random Forest Model, as well as test their Ensemble. The results will be discussed in the Result section.
+
+Before splitting the dataset into the training and test sets, let's get rid of the unused columns and rename Year_of_Release and EU_Sales for the sake of simplicity:
+```{r final clean up}
+data <- data %>% select(-NA_Sales, -JP_Sales, -Other_Sales, -Global_Sales, -Critic_Count, -User_Score, -User_Count, -Publisher, -Developer, -Rating, -Platform)
+data <- data %>% rename(Year = Year_of_Release, Sales = EU_Sales)
+```
+The models will be fitted using only the training set. Once a model is done, it will be evaluated using the test set. The evaluaton criterion is defined as the proportion of cases that were correctly predicted as Bestsellers in the test set, i.e. overall accuracy. We will also explore the weighted average of Precision and Recall, F1 score, that takes both false positives and false negatives into account. Accuracy works best if false positives and false negatives have similar cost, but we have quite an uneven class distribution, even though we care about Sensitivity more (obviously, there are fewer bestsellers than regular games).
+
+The dataset now has
+```{r final data rows, echo=FALSE}
+nrow(data)
+```
+rows. If we take 20% of the data as the test set, statistically, it should be Ok in terms of underfitting and variance overfitting. 
+```{r train-test}
+set.seed(1, sample.kind="Rounding")
+test_index <- createDataPartition(y = data$Bestseller, times = 1, p = 0.2, list = FALSE)
+train_set <- data[-test_index,]
+test_set <- data[test_index,]
+```
+Now that the train and test sets are clean and tidy, we are ready and steady to explore the values.
+
+# Data Analysis and Models
+
+## Data Analysis
+
+### Overview
+
+Here are the numbers of unique values in some columns:
+```{r ns, echo=FALSE}
+train_set %>% 
+    summarize(n_games = n_distinct(Name),
+              n_genre = n_distinct(Genre), 
+              n_producer = n_distinct(Producer))
+```
+
+Judging by n_games, some games, apparently, differ by Name + Platform, rather than have a unique record in the Name column. So we may have duplicates. Let's check them. 
+
+```{r duplicate names, echo=FALSE}
+train_set %>% filter(Name %in% train_set[which(duplicated(train_set)),1])
+```
+
+All of them are Regular, so the duplicates with united Platforms will not mess up the prediction. 
+Let's see what the proportion of Bestsellers in the training set:
+
+
+```{r bestseller means, echo=FALSE}
+train_set %>% ggplot(aes(Bestseller, group = Bestseller, fill = Bestseller)) +
+  geom_bar() +
+  ylab("Number of Games") +
+  ggtitle("The Proportion of Bestsellers")
+```
+
+
+```{r bestseller mean number, echo=FALSE}
+mean(train_set$Bestseller == "Bestseller")
+```
+
+There are about 11% of Bestsellers.
+
+### Sales Data
+
+The general plot of 50 top-selling games reveals that there is one uncconditional outlier, Wii Sports. 
+
+```{r top 50 games, echo=FALSE}
+train_set %>% arrange(desc(Sales)) %>%
+  head(50) %>%
+  ggplot(aes(x = reorder(Name, Sales), y = Sales)) + 
+  geom_bar(stat = "identity", fill = "grey") + 
+  xlab("Names") + 
+  ylab("Sales") +
+  coord_flip() + 
+  theme_bw() +  
+  ggtitle("Most Selling Games") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+It will bias the models, so we will remove it.
+```{r no outlier}
+train_set <- train_set %>% filter(Sales < 20)
+```
+### Critical Score Data
+
+Our intuition says that users must rely on the critics' opinion when bying games. Let's check if it's true.
+
+```{r no critic scoresby sales, echo=FALSE}
+train_set %>%
+  ggplot(aes(Bestseller, Critic_Score, fill = Bestseller)) +
+  geom_boxplot()
+```
+There are indeed more higher scores among game bestsellers. Yet because of the intersection we cannot build a decision rule based only on the Critic Score.
+
+### Year Data
+
+Let's have a look at the table of years: 
+
+```{r years by table, echo=FALSE}
+table(train_set$Year)
+```
+
+There are very few games before 1996. We will disregard them as outliers to avoid bias.
+
+```{r 1995, echo=FALSE}
+train_set <- train_set %>% filter(Year >= 1996)
+```
+
+The Year - Game distribution is now as follows.
+
+```{r 1996, echo=FALSE}
+train_set %>% ggplot(aes(Year)) +
+  geom_bar()
+```
+
+There are more games in the recent years, but are there more Bestsellers? 
+
+```{r best years, echo=FALSE}
+train_set %>% group_by(Year, Bestseller) %>% summarise(Count=n()) %>%
+  ggplot(aes(Year,Count, col=Bestseller)) +
+  geom_line()
+```
+
+Most bestsellers happened in 2006-2010. Let's see if Critic_Score and Year together would be enough for prediction.
+
+```{r best score-year, echo=FALSE}
+train_set %>% ggplot(aes(Critic_Score, Year, color = Bestseller)) +
+  geom_point() + 
+  scale_x_continuous() + 
+  scale_y_continuous(breaks = c(seq(1996, 2016, 1))) 
+```
+Generally, the higher the Critic score, the more chances that the game is a bestseller. And there are more bestsellers after 2007. This is a solid insight, but we have such a small train set that it can prove wrong on any bigger data. We will try to use more parameters. 
+
+### Genre Data
+
+Let's compare wordclouds for genres:
+
+```{r gwc, echo=FALSE}
+genres <- train_set %>% 
+  group_by(Genre) %>%
+  summarize(Count = n()) %>%
+  arrange(desc(Count))
+layout(matrix(c(1,2), nrow =2) , heights = c(1,4))
+par(mar = rep(0,4))
+plot.new()
+text(x = 0.5, y = 0.5, "All Genres by Count")
+wc_all <- wordcloud(words = genres$Genre, freq = genres$Count, random.order = FALSE, random.color = FALSE,
+                    rot.per = 0.35, colors = brewer.pal(7,"Greens"), scale = c(4,.2), font = 2, main = "Genres by Count")
+```
+
+There are more Action games and fewer Puzzles.
+
+```{r bwc, echo=FALSE}
+best_genres <- train_set %>% filter(Bestseller == "Bestseller") %>% group_by(Genre) %>%
+  summarize(Count = n()) %>%
+  arrange(desc(Count))
+layout(matrix(c(1,2), nrow = 2) , heights = c(1,4))
+par(mar = rep(0,4))
+plot.new()
+text(x = 0.5, y = 0.5, "Bestseller Genres by Count")
+wc_best <- wordcloud(words = best_genres$Genre, freq = best_genres$Count, random.order = FALSE, random.color = FALSE,
+                     rot.per = 0.35, colors = brewer.pal(7,"Greens"), scale = c(4,.2), font = 2, main = "Genres by Count")
+```
+
+Puzzles don't seem of any importance whatsoever. The wordclouds are overall very similar. We'll check it with the models, but it seems that Genres don't drive a significant distinction between bestsellers and regular sales. 
+
+### Producer Data
+
+The Producer - Sales bar plot shows that Sony Platforms are more popular. Microsoft and Nintendo ones are about the same in terms of sales.
+
+```{r producer, echo=FALSE}
+train_set %>% group_by(Producer) %>%
+  summarise(Sum = sum(Sales)) %>%
+  arrange(desc(Sum)) %>%
+  head(10) %>%
+  ggplot(aes(reorder(Producer, -Sum), Sum)) + 
+  geom_bar(stat = "identity", fill = "grey") + 
+  xlab("Producer") + 
+  ylab("Sales") + 
+  ggtitle("Sales by Producers") + 
+  theme_bw() 
+```
+We will get rid of Other Producers due to the lack of data on them.
+```{r producer out, echo=FALSE}
+train_set <- train_set %>% filter(Producer != "Other")
+```
+
+## Models
+
+We will use the caret package for fitting all models, so it's better to have factor outcomes between 1 and 0. Plus it's easier to calculate Accuracies as means. 
+
+```{r factors, echo=FALSE}
+train_set$Bestseller <- as.factor(+(train_set$Bestseller == "Bestseller"))
+test_set$Bestseller <- as.factor(+(test_set$Bestseller == "Bestseller"))
+```
+
+### Logistic Regression Model
+
+The regression model adapted to logical outcomes is the simpliest one. We will start with it and see if other models will beat its results.
+
+```{r glm, echo=FALSE}
+fit_glm <- train(Bestseller ~ Critic_Score + Genre + Year + Producer, method = "glm", data = train_set)
+pred_glm <- predict(fit_glm, test_set)
+cm_glm <- confusionMatrix(pred_glm, as.factor(test_set$Bestseller))
+cm_glm 
+```
+So the accuracy of the model is 
+```{r acc_glm, echo=FALSE}
+acc_glm <- cm_glm$overall["Accuracy"]
+acc_glm
+```
+which is quite high, but the F1 Score is almost in the middle: 
+```{r f1_glm, echo=FALSE}
+bacc_glm <- cm_glm$byClass["Balanced Accuracy"]
+bacc_glm
+```
+
+This model has very low Specificity.  
+
+```{r res, echo=FALSE}
+results <- data_frame(Model = "Generalised Linear Model", 
+                      Accuracy = format(round(acc_glm, 6), nsmall = 6), 
+                      F1_Score = format(round(bacc_glm, 6), nsmall = 6))
+```
+
+### kNN model
+
+For a kNN model, we compute the distance between each observation. This computation can take long time, so we will adjust it with 10-fold cross validation (through trainControl). Thus, we will have we will have 10 samples using 10% of the observations each.
+
+```{r knn, echo=FALSE}
+set.seed(1, sample.kind = "Rounding")  
+control <- trainControl(method = "cv", number = 10, p = .9)
+fit_knn <- train(Bestseller ~ Critic_Score + Genre + Year + Producer,
+                  method = "knn",
+                  data = train_set,
+                  tuneGrid = data.frame(k = seq(3, 51, 2)),
+                  trControl = control)
+```
+
+Best k is: 
+
+```{r k for knn, echo=FALSE}
+fit_knn$bestTune
+```
+```{r k plot, echo=FALSE}
+ggplot(fit_knn)
+```
+```{r knn pred, echo=FALSE}
+pred_knn <- predict(fit_knn, test_set)
+cm_knn <- confusionMatrix(pred_knn, as.factor(test_set$Bestseller))
+cm_knn 
+```
+
+Let's compare the models: 
+
+```{r knn res, echo=FALSE}
+acc_knn <- cm_knn$overall["Accuracy"]
+bacc_knn <- cm_knn$byClass["Balanced Accuracy"]
+results <- bind_rows(results, 
+                     data_frame(Model = "kNN Model", 
+                                Accuracy = format(round(acc_knn, 6), nsmall = 6), 
+                                F1_Score = format(round(bacc_knn, 6), nsmall = 6)))
+results 
+```
+
+So far so good. With the kNN Model we have better Accuracy and better F1 Score.
+
+### Classification Tree Model
+
+We will apply cross-validation here to avoid too many partitions so that the model would adapt to the training data.
+
+```{r CART, echo=FALSE}
+set.seed(1, sample.kind = "Rounding")  
+fit_rpart <- train(Bestseller ~ Critic_Score + Genre + Year + Producer, data = train_set,
+                     method = "rpart",
+                     tuneGrid = data.frame(cp = seq(0, 0.05, 0.002)))
+```
+
+The optimal value of cp is:
+
+```{r CART tune, echo=FALSE}
+fit_rpart$bestTune
+```
+```{r CART plot, echo=FALSE}
+ggplot(fit_rpart)
+```
+
+Let's have a look at the final decision tree:
+
+```{r CART fm, echo=FALSE}
+fit_rpart$finalModel
+```
+The most important (root) variable here is Critic Score:
+```{r CART imp, echo=FALSE}
+varImp(fit_rpart)
+```
+
+And Genre (as we suspected) does not have much weight. 
+The Confusion Matrix along with the results are as follows: 
+```{r cm rpart, echo=FALSE}
+pred_rpart <- predict(fit_rpart, test_set)
+cm_rpart <- confusionMatrix(pred_rpart, as.factor(test_set$Bestseller))
+cm_rpart 
+acc_rpart <- cm_rpart$overall["Accuracy"]
+bacc_rpart <- cm_rpart$byClass["Balanced Accuracy"]
+```
+Let's check the results: 
+```{r rpart res, echo=FALSE}
+results <- bind_rows(results, 
+                     data_frame(Model = "Classification Tree Model", 
+                                Accuracy = format(round(acc_rpart, 6), nsmall = 6), 
+                                F1_Score = format(round(bacc_rpart, 6), nsmall = 6)))
+results 
+```
+
+Classification Tree Model turned out to be worse than kNN. Can we improve it with Random Forest? 
+
+### Random Forest Model
+
+For Random Forest Models fitting is the slowest part, so we will only 5-fold cross validation. We will also try to maximise accuracy with mtry. Like with the Classification Tree Model, we will restrict growth by small nodesize. Plus the ntree parameter restricts the number of trees for the sake of faster computation. So the model is as follows:
+
+```{r rf}
+set.seed(1, sample.kind = "Rounding")
+control <- trainControl(method="cv", number = 5)
+fit_rf <- train(Bestseller ~ Critic_Score + Genre + Year + Producer, data = train_set,
+                method = "rf",
+                ntree = 150, nodesize = 1,
+                tuneGrid = data.frame(mtry = seq(1:7)),
+                trControl = control)
+```
+The best mtry turns out: 
+```{r mtry, echo=FALSE}
+fit_rf$bestTune
+```
+```{r plot mtry, echo=FALSE}
+ggplot(fit_rf)
+```
+Veriable importance:
+```{r imp rf, echo=FALSE}
+varImp(fit_rf) 
+```
+And the Confusion Matrix:
+```{r pred rf, echo=FALSE}
+pred_rf <- predict(fit_rf, test_set)
+cm_rf <- confusionMatrix(pred_rf, as.factor(test_set$Bestseller))
+cm_rf
+```
+The overall result: 
+```{r cm rf, echo=FALSE}
+acc_rf <- cm_rf$overall["Accuracy"]
+bacc_rf <- cm_rf$byClass["Balanced Accuracy"]
+results <- bind_rows(results, 
+                     data_frame(Model = "Random Forest Model", 
+                                Accuracy = format(round(acc_rf, 6), nsmall = 6), 
+                                F1_Score = format(round(bacc_rf, 6), nsmall = 6)))
+results
+```
+The accuracy is very good. Will Ensemble be able to improve it? 
+
+### Ensemble
+
+After comparing different combinations of all 4 models, the best result was achieved by combining KNN and Random Forest models (as they are both have the highest accuracy). The final result is as follows:
+```{r results}
+p_knn <- predict(fit_knn, test_set, type = "prob")
+p_rf <- predict(fit_rf, test_set, type = "prob")
+p_rf <- p_rf/rowSums(p_rf)
+p <- (p_knn + p_rf)/2
+pred <- factor(apply(p, 1, which.max)-1) 
+cm <- confusionMatrix(pred, as.factor(test_set$Bestseller))
+acc <- cm$overall["Accuracy"]
+bacc <- cm$byClass["Balanced Accuracy"]
+results <- bind_rows(results, 
+                     data_frame(Model = "KNN + RF Ensemble", 
+                                Accuracy = format(round(acc, 6), nsmall = 6), 
+                                F1_Score = format(round(bacc, 6), nsmall = 6)))
+results
+```
+
+# Results
+
+Not surprisingly, the best accuracy is achieved with ensemble of the two models out of the three best performing ones. The balanced Precision-Recall accuracy is at its highest in the kNN Model, and it didn't come much closer to 1. At the same time, F1 Score was used for monitoring. 
+
+Our dataset is disbalanced by its nature, so it's quite predictable that there could be many cases when a Regular video game will be called a Bestseller (there are many Developers and Publishers who would love to believe in it:))
+
+```{r megaresults, echo=FALSE}
+datatable(results, rownames = FALSE, filter = "top", options = list(pageLength = 5, scrollX = T)) 
+```
+
+# Conclusion
+
+By the Year-Critic_Score plot it was more or less predictable that the logistic regression could give a good result (it somehow resembles a regression line). With the best result achieved using kNN and Ensemble, it's worth trying other models. Yet, using any other more advanced machine learning approach one should be aware of the complexity of computations.
+
+In this project the classification was limited to using only Producer, Year, Genre, and Critic Score. There could be further enhancements of the models with adding Rating, Developer, and Publisher values. Definitely, exploring User Score would give more insights, but here it was excluded on purpose, as we cannot have these data for the games before their release. 
+
+As we saw, before 1996 there were very few observations. We excluded it because we didn't want to have the unnesesssary shift. In the random forest model I was experimenting with adding more weight to recent years, but it didn't work out for the better accuracy. 
+
+Also, if there were more observations in the dataset the result would be better. Empty Critic Scores could be filled with a mean imputation (for instance, using Genre and/or Producer/Platform). Rating could potentially have some effect (as the video games for broader audience have more chances to become a bestseller). 
+
+Futhermore, the data of the initial data file cuts off at 2016. Perhaps, for the time being more data can be scrapped.
